@@ -205,19 +205,19 @@ exports.removeTrailingZeros = function(arr){
 
 // iOS audio fix, to allow playing sounds from the first touch
 exports.iosAudioFix = function(element, callback){
-	var isUnlocked = false;
-	element.ontouchend = function(){
-		if(isUnlocked) return;
+	var iOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
+	if(iOS){
+		var isUnlocked = false;
+		element.ontouchend = function(){
+			console.log('ontouchend')
+			if(isUnlocked) return;
 
+			isUnlocked = true;
+			if(callback) callback();
+		};
+	} else {
 		if(callback) callback();
-
-		// by checking the play state after some time, we know if we're really unlocked
-		setTimeout(function() {
-			if((source.playbackState === source.PLAYING_STATE || source.playbackState === source.FINISHED_STATE)) {
-				isUnlocked = true;
-			}
-		}, 0);
-	};
+	}
 };
 
 exports.values = function(obj){
@@ -231,14 +231,14 @@ exports.values = function(obj){
 // Parse query vars
 // "search" is window.location.search
 exports.parseQueryVariables = function(search,variables) {
-    var query = search.substring(1);
-    var vars = query.split('&');
+	var query = search.substring(1);
+	var vars = query.split('&');
 	var result = {};
-    for (var i = 0; i < vars.length; i++) {
-        var pair = vars[i].split('=');
+	for (var i = 0; i < vars.length; i++) {
+		var pair = vars[i].split('=');
 		var varName = decodeURIComponent(pair[0]);
 		var type = variables[varName];
-        if (type === undefined) continue;
+		if (type === undefined) continue;
 
 		var value = decodeURIComponent(pair[1]);
 		var ok = false;
@@ -257,9 +257,9 @@ exports.parseQueryVariables = function(search,variables) {
 		}
 		if(ok){
 			result[varName] = value;
-        }
-    }
-    return result;
+		}
+	}
+	return result;
 };
 
 exports.floodfill = function(get, set, x, y, target, replace, xmin, xmax, ymin, ymax){

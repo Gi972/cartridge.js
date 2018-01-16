@@ -2552,9 +2552,14 @@ var loaded = false; // Loaded state
 var _alpha = 0;
 var pixelPerfectMode = 0;
 var autoFit = false;
+var responsive = false;
+var responsiveRect = new Rectangle(0,0,128,128);
+var gameTitle = 'game';
+var soundFixed = false;
 
 exports.cartridge = function(options){
 	autoFit = options.autoFit !== undefined ? options.autoFit : true;
+	responsive = options.responsive !== undefined ? options.responsive : false;
 	pixelPerfectMode = options.pixelPerfect !== undefined ? options.pixelPerfect : 0;
 	var numCanvases = options.layers !== undefined ? options.layers : 1;
 	container = options.containerId ? document.getElementById(options.containerId) : null;
@@ -2598,18 +2603,12 @@ exports.cartridge = function(options){
 	mouse.init(canvases);
 	pixelops.init(canvases[0]); // todo: support multiple
 
-	utils.iosAudioFix(canvases[0], function(){
-		// restart sound nodes here
-		sfx.iosFix();
-		music.iosFix();
-	});
-
 	if(autoFit){
-		fit(pixelPerfectMode);
 		// Resize (fit) the canvas when the container changes size
 		var resizeHandler = function(){
-			fit(pixelPerfectMode);
+			fit(pixelPerfectMode, responsive);
 		};
+		resizeHandler();
 		window.addEventListener('resize', resizeHandler);
 		window.addEventListener('mozfullscreenchange', resizeHandler);
 	}
@@ -2668,6 +2667,17 @@ exports.cartridge = function(options){
 
 	// Init font
 	font.init(paletteHex);
+
+	utils.iosAudioFix(canvases[0], function(){
+		// restart sound nodes here
+		sfx.iosFix();
+		music.iosFix();
+		soundFixed = true;
+
+		if(loaded && typeof(_sound) === 'function'){
+			runUserFunction(_sound);
+		}
+	});
 };
 
 exports.run = function(){
@@ -2689,6 +2699,11 @@ function runInit(){
 	loaded = true;
 	if(typeof(_init) === 'function'){
 		runUserFunction(_init);
+	}
+	if(soundFixed){
+		if(loaded && typeof(_sound) === 'function'){
+			runUserFunction(_sound);
+		}
 	}
 }
 function runKill(){
@@ -2826,7 +2841,7 @@ function resizeCanvases(){
 		canvases[i].height = screensizeY;
 	}
 	if(autoFit){
-		fit(pixelPerfectMode);
+		fit(pixelPerfectMode, responsive);
 	}
 	pixelops.resize(canvases[0]);
 
@@ -2839,11 +2854,12 @@ exports.alpha = function(){ return _alpha; }; // for interpolation
 // TODO: rename to wget/set() ?
 exports.width = function(newWidth){
 	if(newWidth !== undefined){
+		newWidth = newWidth | 0;
 		if(screensizeX === newWidth){
 			// unchanged
 			return;
 		}
-		screensizeX = newWidth | 0;
+		screensizeX = newWidth;
 		resizeCanvases();
 	}
 	return screensizeX;
@@ -2852,11 +2868,12 @@ exports.width = function(newWidth){
 // TODO: rename to hget/set() ?
 exports.height = function(newHeight){
 	if(newHeight !== undefined){
+		newHeight = newHeight | 0;
 		if(screensizeY === newHeight){
 			// unchanged
 			return;
 		}
-		screensizeY = newHeight | 0;
+		screensizeY = newHeight;
 		resizeCanvases();
 	}
 	return screensizeY;
@@ -3065,11 +3082,13 @@ function ssy(n){
 	return Math.floor(n / spriteSheetSizeX) % (spriteSheetSizeX * spriteSheetSizeY);
 }
 
+// Render a sprite at position X,Y in the sprite sheet
 exports.spr2 = function(nx, ny, x, y, w, h, flip_x, flip_y){
 	var n = ny * spriteSheetSizeX + nx;
 	return spr(n, x, y, w, h, flip_x, flip_y);
 };
 
+// Render a sprite given its id
 exports.spr = function spr(n, x, y, w, h, flip_x, flip_y){
 	pixelops.beforeChange();
 	flushSpriteSheet();
@@ -3219,6 +3238,14 @@ exports.sset = function(x, y, col){
 	mapDirty = true; // TODO: Only invalidate matching map positions
 };
 
+// Game title
+exports.title = function(newTitle){
+	if(newTitle !== undefined){
+		gameTitle = newTitle;
+	}
+	return gameTitle;
+};
+
 exports.fullscreen = function fullscreen(){
 	utils.fullscreen(container);
 };
@@ -3251,7 +3278,23 @@ exports.print = function(text, x, y, col){
 	font.draw(ctx, text.toString().toUpperCase(), x, y, col);
 };
 
-exports.fit = function fit(stretchMode){
+exports.fit = function fit(stretchMode, responsive){
+	if(responsive){
+		var rect = container.getBoundingClientRect();
+		var aspect = rect.width / rect.height;
+		var responsiveAspect = responsiveRect.w / responsiveRect.h;
+		var newWidth = responsiveRect.w;
+		var newHeight = responsiveRect.h;
+		if(aspect > responsiveAspect){
+			// Increase width
+			newWidth *= aspect / responsiveAspect;
+		} else {
+			newHeight *= responsiveAspect / aspect;
+		}
+		width(newWidth);
+		height(newHeight);
+	}
+
 	stretchMode = stretchMode !== undefined ? stretchMode : 0;
 	var pixelPerfect = (stretchMode === 0);
 	var i = canvases.length;
@@ -3289,6 +3332,10 @@ exports.save = function(key){
 	}
 };
 
+exports.json = function(){
+	return toJSON();
+};
+
 exports.load = function(key){
 	if(typeof(key) === 'object'){
 		loadJSON(key);
@@ -3322,12 +3369,13 @@ function download(key){
 function toJSON(){
 	var i,j;
 	var data = {
-		version: 8,
+		version: 9,
 		width: width(), // added in v3
 		height: height(), // added in v3
 		cellwidth: cellwidth(), // added in v4
 		cellheight: cellheight(), // added in v4
 		spritesheetsize: ssget(), // added in v5
+		title: title(), // added in v9
 		map: [],
 		sprites: [],
 		flags: [],
@@ -3403,8 +3451,7 @@ function toJSON(){
 			var octave = noget(groupIndex, position);
 			var instrument = niget(groupIndex, position);
 			var volume = nvget(groupIndex, position);
-			// TODO: effect
-			var effect = 0;
+			var effect = neget(groupIndex, position);
 			data.tracks.push(pitch, octave, instrument, volume, effect);
 		}
 	}
@@ -3427,6 +3474,8 @@ function toJSON(){
 function loadJSON(data){
 	var i,j;
 	code.codeset(data.code || '');
+
+	title(data.title || 'game');
 
 	if(data.width !== undefined){
 		width(data.width);
@@ -3498,7 +3547,7 @@ function loadJSON(data){
 				var octave = data.tracks[p + 1] || 0;
 				var instrument = data.tracks[p + 2] || 0;
 				var volume = data.tracks[p + 3] || 0;
-				var effect = data.tracks[p + 4] || 0; // todo
+				var effect = data.tracks[p + 4] || 0;
 
 				if(data.version <= 6){
 					// in v7, all octaves were lowered by 1.
@@ -3509,6 +3558,7 @@ function loadJSON(data){
 				noset(groupIndex, position, octave);
 				niset(groupIndex, position, instrument);
 				nvset(groupIndex, position, volume);
+				neset(groupIndex, position, effect);
 			}
 		}
 	}
@@ -3572,6 +3622,18 @@ exports.mousex = function(){
 
 exports.mousey = function(){
 	return Math.floor(mouse.mouseyNormalized() * (screensizeY-1));
+};
+
+exports.touchx = function(id){
+	return Math.floor(mouse.touchxNormalized(id) * (screensizeX-1));
+};
+
+exports.touchy = function(id){
+	return Math.floor(mouse.touchyNormalized(id) * (screensizeY-1));
+};
+
+exports.mobile = function(){
+	return utils.isMobile();
 };
 
 utils.makeGlobal(music);
@@ -3744,6 +3806,27 @@ exports.mousebtn = function mousebtn(i){
 	return !!_mousebtns[i];
 };
 
+var _touches = {};
+exports.touchn = function touchn(){ return Object.keys(_touches).length; };
+exports.touchid = function touchn(i){
+	var key = Object.keys(_touches)[i];
+	return _touches[ key ].identifier;
+};
+exports.touchdown = function touchdown(id){
+	return !!_touches[id];
+};
+exports.touchxNormalized = function touchxNormalized(id){
+	var clientX = _touches[id].clientX;
+	var rect = _touches[id].target.getBoundingClientRect(); // cache this?
+	return math.clamp((clientX - rect.left) / rect.width, 0, 1);
+};
+exports.touchyNormalized = function touchyNormalized(id){
+	var clientY = _touches[id].clientY;
+	var rect = _touches[id].target.getBoundingClientRect(); // cache this?
+	var y = math.clamp((clientY - rect.top) / rect.height, 0, 1);
+	return y;
+};
+
 function addListeners(canvases){
 	canvasListeners = {
 		click: function(evt){
@@ -3769,6 +3852,24 @@ function addListeners(canvases){
 		mousewheel: function(evt){
 			var delta = Math.max(-1, Math.min(1, (evt.wheelDelta || -evt.detail)));
 			_mousescroll += delta;
+		},
+		touchstart: function(evt){
+			evt.preventDefault();
+			for(var i=0; i<evt.changedTouches.length; i++){
+				_touches[evt.changedTouches[i].identifier] = evt.changedTouches[i];
+			}
+		},
+		touchmove: function(evt){
+			evt.preventDefault();
+			for(var i=0; i<evt.changedTouches.length; i++){
+				_touches[evt.changedTouches[i].identifier] = evt.changedTouches[i];
+			}
+		},
+		touchend: function(evt){
+			evt.preventDefault();
+			for(var i=0; i<evt.changedTouches.length; i++){
+				delete _touches[evt.changedTouches[i].identifier];
+			}
 		}
 	};
 	canvasListeners.DOMMouseScroll = canvasListeners.mousewheel;
@@ -3805,8 +3906,14 @@ function updateMouseCoords(evt, canvases){
 	var parentRect = evt.target.parentNode.getBoundingClientRect(); // cache this?
 	var subx = 0;
 	var suby = 0;
-	_mousex = math.clamp((evt.clientX - rect.left - subx) / rect.width, 0, 1);
-	_mousey = math.clamp((evt.clientY - rect.top - suby) / rect.height, 0, 1);
+	var clientX = evt.clientX;
+	var clientY = evt.clientY;
+	if(evt.changedTouches){
+		clientX = evt.changedTouches[0].clientX;
+		clientY = evt.changedTouches[0].clientY;
+	}
+	_mousex = math.clamp((clientX - rect.left - subx) / rect.width, 0, 1);
+	_mousey = math.clamp((clientY - rect.top - suby) / rect.height, 0, 1);
 }
 
 exports.mousexNormalized = function(){ return _mousex; };
@@ -3815,7 +3922,10 @@ exports.mouseyNormalized = function(){ return _mousey; };
 exports.global = {
 	mousebtn: exports.mousebtn,
 	click: exports.click,
-	mousescroll: exports.mousescroll
+	mousescroll: exports.mousescroll,
+	touchn: exports.touchn,
+	touchid: exports.touchid,
+	touchdown: exports.touchdown
 };
 
 },{"./math":9,"./utils":14}],11:[function(require,module,exports){
@@ -3930,6 +4040,16 @@ exports.niget = function(group, position){
 	return groups[group].notes[5 * position + 2];
 };
 
+// effect for a note
+exports.neset = function(group, position, effect){
+	effect = effect !== undefined ? effect : 0;
+	groups[group].notes[5 * position + 4] = effect;
+};
+
+exports.neget = function(group, position){
+	return groups[group].notes[5 * position + 4];
+};
+
 // Set a group to be played in a channel in a pattern.
 exports.mgset = function(pattern, channel, group){
 	group = group !== undefined ? group : 0;
@@ -3952,75 +4072,82 @@ exports.mfget = function(pattern){
 	return patterns[pattern * 5 + 0];
 };
 
-// Create audio stuff
-// TODO: share with sfx - create a class?
-var context = sfx.getContext();
-var masterGain = sfx.getMasterGain();
 var channels = [];
-var oscillatorTypes = sfx.getOscillatorTypes();
 var allTypes = sfx.getAllOscillatorTypes();
-var cTime = context.currentTime;
-for(var j=0; j<4; j++){ // one for each channel in the music
-	var channel = {
-		instruments: {},
-		gains: {},
-		volumeMultipliers: {}
-	};
-	channels.push(channel);
+var oscillatorTypes = sfx.getOscillatorTypes();
 
-	// add 4 basic instruments and gains to channel
-	for(var i=0; i<oscillatorTypes.length; i++){
-		var osc = context.createOscillator();
-		var type = oscillatorTypes[i];
-		osc.type = type;
+// Create audio stuff
+function initChannels(){
+	// TODO: share with sfx - create a class?
+	var context = sfx.getContext();
+	var masterGain = sfx.getMasterGain();
+	var cTime = context.currentTime;
+	for(var j=0; j<4; j++){ // one for each channel in the music
+		var channel = {
+			instruments: {},
+			gains: {},
+			volumeMultipliers: {}
+		};
+		channels.push(channel);
 
+		// add 4 basic instruments and gains to channel
+		for(var i=0; i<oscillatorTypes.length; i++){
+			var osc = context.createOscillator();
+			var type = oscillatorTypes[i];
+			osc.type = type;
+
+			var gain = context.createGain();
+			gain.gain.value = 0;
+			gain.connect(masterGain);
+
+			osc.connect(gain);
+			channel.instruments[type] = osc;
+			channel.gains[type] = gain;
+			channel.volumeMultipliers[type] = 1 / sfx.rms[type];
+		}
+
+		// Add square25 / pulse
 		var gain = context.createGain();
 		gain.gain.value = 0;
 		gain.connect(masterGain);
+		var square25 = sfx.createPulse(gain);
+		channel.instruments.square25 = square25;
+		channel.gains.square25 = gain;
+		channel.volumeMultipliers.square25 = 1 / sfx.rms.square25;
 
-		osc.connect(gain);
-		channel.instruments[type] = osc;
-		channel.gains[type] = gain;
-		channel.volumeMultipliers[type] = 1 / sfx.rms[type];
-		osc.start(cTime);
+		// Add white noise
+		gain = context.createGain();
+		gain.gain.value = 0;
+		gain.connect(masterGain);
+		var whiteNoise = sfx.createWhiteNoise(gain);
+		channel.instruments.white = whiteNoise;
+		channel.gains.white = gain;
+		channel.volumeMultipliers.white = 1 / sfx.rms.white;
 	}
+}
 
-	// Add square25 / pulse
-	var gain = context.createGain();
-	gain.gain.value = 0;
-	gain.connect(masterGain);
-	var square25 = sfx.createPulse(gain);
-	channel.instruments.square25 = square25;
-	channel.gains.square25 = gain;
-	channel.volumeMultipliers.square25 = 1 / sfx.rms.square25;
-	square25.start(cTime);
-
-	// Add white noise
-	gain = context.createGain();
-	gain.gain.value = 0;
-	gain.connect(masterGain);
-	var whiteNoise = sfx.createWhiteNoise(gain);
-	channel.instruments.white = whiteNoise;
-	channel.gains.white = gain;
-	channel.volumeMultipliers.white = 1 / sfx.rms.white;
-	whiteNoise.start(cTime);
+function startChannels(time){
+	channels.forEach(function(channel){
+		for(var instrumentName in channel.instruments){
+			var oscillator = channel.instruments[instrumentName];
+			oscillator.start(time);
+		}
+	});
 }
 
 exports.iosFix = function(){
-	channels.forEach(function(channel){
-		for(var instrumentName in channel.instruments){
-			try {
-				channel.instruments[instrumentName].start(context.currentTime);
-			} catch(err){
-				console.error(err);
-			}
-		}
-	});
+	initChannels();
+	var time = sfx.getContext().currentTime;
+	try {
+		startChannels(time);
+	} catch(err){
+		console.error(err);
+	}
 };
 
 // preview play a group
 exports.group = function(groupIndex, channelIndex){
-	scheduleGroup(groupIndex, channelIndex||0, context.currentTime);
+	scheduleGroup(groupIndex, channelIndex||0, sfx.getContext().currentTime);
 };
 
 function scheduleGroup(groupIndex, channelIndex, time){
@@ -4033,16 +4160,34 @@ function scheduleGroup(groupIndex, channelIndex, time){
 		var pitch = npget(groupIndex, i);
 		var octave = noget(groupIndex, i);
 		var instrument = niget(groupIndex, i);
+		var effect = neget(groupIndex, i);
 		if(volume === 0){
 			continue;
 		}
 		var startPosition = i;
 		var endPosition = i+1;
-		while(nvget(groupIndex, endPosition) === volume && niget(groupIndex, endPosition) === instrument && npget(groupIndex, endPosition) === pitch && noget(groupIndex, endPosition) === octave && endPosition < 32){
+
+		/*
+		while(
+			nvget(groupIndex, endPosition) === volume &&
+			niget(groupIndex, endPosition) === instrument &&
+			npget(groupIndex, endPosition) === pitch &&
+			noget(groupIndex, endPosition) === octave &&
+			neget(groupIndex, endPosition) === 0 &&
+			endPosition < 32
+		){
 			endPosition++;
 		}
+		*/
+
 		var startTime = time + startPosition / speed;
 		var endTime = time + endPosition / speed;
+
+		if(effect === 1){
+			// make note slightly shorter
+			startTime = time + (startPosition + 0.0) / speed;
+			endTime = time + (endPosition - 0.25) / speed;
+		}
 
 		var osc = channel.instruments[allTypes[instrument]];
 		var gain = channel.gains[allTypes[instrument]];
@@ -4050,8 +4195,14 @@ function scheduleGroup(groupIndex, channelIndex, time){
 
 		if(osc.frequency){ // noise doesn't have frequency
 			var frequency = getFrequency(pitch, octave);
-			osc.frequency.setValueAtTime(frequency, startTime);
-			if(frequency !== 0) volumeMultiplier /= aWeight(frequency);
+
+			if(effect === 2 && startPosition !== 0){
+				// slide frequency
+				osc.frequency.linearRampToValueAtTime(frequency, startTime);
+			} else {
+				osc.frequency.setValueAtTime(frequency, startTime);
+			}
+			//if(frequency !== 0) volumeMultiplier /= aWeight(frequency);
 		}
 		gain.gain.setValueAtTime(volumeMultiplier * volume / 7, startTime);
 		gain.gain.setValueAtTime(0, endTime-0.000001);
@@ -4069,7 +4220,7 @@ exports.music = function(patternIndex, fade, channelmask){
 		return;
 	}
 
-	var startTime = context.currentTime;
+	var startTime = sfx.getContext().currentTime;
 
 	playState.pattern = patternIndex;
 	playState.nextPattern = getNextPattern(patternIndex);
@@ -4093,7 +4244,7 @@ function stop(fade){
 	playState.pattern = -1;
 	playState.nextPattern = -1;
 
-	var currentTime = context.currentTime;
+	var currentTime = sfx.getContext().currentTime;
 	for(var channelIndex=0; channelIndex<channels.length; channelIndex++){
 		var channel = channels[channelIndex];
 		for(var i=0; i<allTypes.length; i++){
@@ -4260,6 +4411,8 @@ var utils = require('./utils');
 var DFT = require('dsp.js/dsp').DFT;
 var aWeight = require('a-weighting/a');
 
+var context, masterGain;
+
 var defaultSpeed = 16;
 var minFrequency = 0;
 var maxFrequency = 1000;
@@ -4267,16 +4420,20 @@ var maxEffects = 64;
 var channels = [];
 var effects = [];
 
-var context = new createAudioContext();
-var masterGain = context.createGain();
-masterGain.gain.value = 0.1;
-masterGain.connect(context.destination);
-
-exports.getContext = function(){
+var getContext = exports.getContext = function(){
+	if(!context){
+		context = new createAudioContext();
+		masterGain = context.createGain();
+		masterGain.gain.value = 0.1;
+		masterGain.connect(context.destination);
+	}
 	return context;
 };
 
 exports.getMasterGain = function(){
+	if(!masterGain){
+		getContext();
+	}
 	return masterGain;
 };
 
@@ -4342,7 +4499,7 @@ function play(channel, types, frequencies, volumes, speed, offset){
 	}
 	if(endPosition === 0) return;
 
-	var currentTime = context.currentTime;
+	var currentTime = getContext().currentTime;
 
 	var prevType = null;
 	for(j=offset; j<endPosition; j++){
@@ -4360,7 +4517,7 @@ function play(channel, types, frequencies, volumes, speed, offset){
 		if(osc.frequency){ // noise doesn't have frequency
 			var frequency = frequencies[j] / 255 * (maxFrequency - minFrequency) + minFrequency;
 			osc.frequency.setValueAtTime(frequency, startTime);
-			if(frequency !== 0) vol /= aWeight(frequency);
+			//if(frequency !== 0) vol /= aWeight(frequency);
 		}
 
 		gain.gain.setValueAtTime(vol, startTime);
@@ -4407,7 +4564,7 @@ exports.sfx = function(n, channelIndex, offset){
 		return false;
 	}
 
-	var contextTime = context.currentTime;
+	var contextTime = getContext().currentTime;
 	if(channelIndex === -1){
 		// Find good channel
 		for(var i=0; i<channels.length; i++){
@@ -4417,7 +4574,7 @@ exports.sfx = function(n, channelIndex, offset){
 				break;
 			}
 		}
-	} else if(channels[channelIndex].occupiedUntil >= contextTime){
+	} else if(!channels[channelIndex] || channels[channelIndex].occupiedUntil >= contextTime){
 		return false;
 	}
 
@@ -4432,8 +4589,9 @@ exports.sfx = function(n, channelIndex, offset){
 
 var whiteNoiseData = null;
 exports.createWhiteNoise = function(destination) {
-	var bufferSize = 2 * context.sampleRate,
-		noiseBuffer = context.createBuffer(1, bufferSize, context.sampleRate),
+	var ctx = getContext();
+	var bufferSize = 2 * ctx.sampleRate,
+		noiseBuffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate),
 		output = noiseBuffer.getChannelData(0);
 
 	if(!whiteNoiseData){
@@ -4445,7 +4603,7 @@ exports.createWhiteNoise = function(destination) {
 
 	output.set(whiteNoiseData);
 
-	var whiteNoise = context.createBufferSource();
+	var whiteNoise = ctx.createBufferSource();
 	whiteNoise.buffer = noiseBuffer;
 	whiteNoise.loop = true;
 
@@ -4457,6 +4615,7 @@ exports.createWhiteNoise = function(destination) {
 var dft = null;
 var pulseWave = null;
 exports.createPulse = function(destination){
+	var ctx = getContext();
 	if(!dft){
 		var count = 128;
 		var vals2 = [];
@@ -4470,73 +4629,80 @@ exports.createPulse = function(destination){
 		dft.forward(vals2);
 
 		// DFT outputs Float64Array but only Float32Arrays are allowed in createPeriodicWave
-		pulseWave = context.createPeriodicWave(
+		pulseWave = ctx.createPeriodicWave(
 			new Float32Array(dft.real),
 			new Float32Array(dft.imag)
 		);
 	}
 
-	var osc = context.createOscillator();
+	var osc = ctx.createOscillator();
 	osc.setPeriodicWave(pulseWave);
 	osc.connect(destination);
 
 	return osc;
 };
 
+function initChannels(){
+	var ctx = getContext();
 
-for(var j=0; j<4; j++){
-	var channel = {
-		oscillators: {},
-		gains: {},
-		occupiedUntil: -1
-	};
-	channels.push(channel);
+	for(var j=0; j<4; j++){
+		var channel = {
+			oscillators: {},
+			gains: {},
+			occupiedUntil: -1
+		};
+		channels.push(channel);
 
-	// add 4 basic oscillators and gains to channel
-	for(var i=0; i<oscillatorTypes.length; i++){
-		var osc = context.createOscillator();
-		var type = oscillatorTypes[i];
-		osc.type = type;
+		// add 4 basic oscillators and gains to channel
+		for(var i=0; i<oscillatorTypes.length; i++){
+			var osc = ctx.createOscillator();
+			var type = oscillatorTypes[i];
+			osc.type = type;
 
-		var gain = context.createGain();
+			var gain = ctx.createGain();
+			gain.gain.value = 0.0001;
+			gain.connect(masterGain);
+
+			osc.connect(gain);
+			channel.oscillators[type] = osc;
+			channel.gains[type] = gain;
+		}
+
+		// Add square25 / pulse
+		var gain = ctx.createGain();
 		gain.gain.value = 0.0001;
 		gain.connect(masterGain);
+		var square25 = exports.createPulse(gain);
+		channel.oscillators.square25 = square25;
+		channel.gains.square25 = gain;
 
-		osc.connect(gain);
-		channel.oscillators[type] = osc;
-		channel.gains[type] = gain;
-		osc.start(context.currentTime);
+		// Add white noise
+		gain = ctx.createGain();
+		gain.gain.value = 0.0001;
+		gain.connect(masterGain);
+		var whiteNoise = exports.createWhiteNoise(gain);
+		channel.oscillators.white = whiteNoise;
+		channel.gains.white = gain;
 	}
+}
 
-	// Add square25 / pulse
-	var gain = context.createGain();
-	gain.gain.value = 0.0001;
-	gain.connect(masterGain);
-	var square25 = exports.createPulse(gain);
-	channel.oscillators.square25 = square25;
-	channel.gains.square25 = gain;
-	square25.start(context.currentTime);
-
-	// Add white noise
-	gain = context.createGain();
-	gain.gain.value = 0.0001;
-	gain.connect(masterGain);
-	var whiteNoise = exports.createWhiteNoise(gain);
-	channel.oscillators.white = whiteNoise;
-	channel.gains.white = gain;
-	whiteNoise.start(context.currentTime);
+function startChannels(time){
+	channels.forEach(function(channel){
+		for(var instrumentName in channel.oscillators){
+			var oscillator = channel.oscillators[instrumentName];
+			oscillator.start(time);
+		}
+	});
 }
 
 exports.iosFix = function(){
-	channels.forEach(function(channel){
-		try {
-			for(var instrumentName in channel.oscillators){
-				channel.oscillators[instrumentName].start(context.currentTime);
-			}
-		} catch(err){
-			console.error(err);
-		}
-	});
+	initChannels();
+	var time = getContext().currentTime;
+	try {
+		startChannels(time);
+	} catch(err){
+		console.error(err);
+	}
 };
 
 for(var i=0; i<maxEffects; i++){
@@ -4547,7 +4713,6 @@ for(var i=0; i<maxEffects; i++){
 		speed: defaultSpeed
 	});
 }
-
 
 exports.global = {
 	asset: exports.asset,
@@ -4768,19 +4933,19 @@ exports.removeTrailingZeros = function(arr){
 
 // iOS audio fix, to allow playing sounds from the first touch
 exports.iosAudioFix = function(element, callback){
-	var isUnlocked = false;
-	element.ontouchend = function(){
-		if(isUnlocked) return;
+	var iOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
+	if(iOS){
+		var isUnlocked = false;
+		element.ontouchend = function(){
+			console.log('ontouchend')
+			if(isUnlocked) return;
 
+			isUnlocked = true;
+			if(callback) callback();
+		};
+	} else {
 		if(callback) callback();
-
-		// by checking the play state after some time, we know if we're really unlocked
-		setTimeout(function() {
-			if((source.playbackState === source.PLAYING_STATE || source.playbackState === source.FINISHED_STATE)) {
-				isUnlocked = true;
-			}
-		}, 0);
-	};
+	}
 };
 
 exports.values = function(obj){
@@ -4794,14 +4959,14 @@ exports.values = function(obj){
 // Parse query vars
 // "search" is window.location.search
 exports.parseQueryVariables = function(search,variables) {
-    var query = search.substring(1);
-    var vars = query.split('&');
+	var query = search.substring(1);
+	var vars = query.split('&');
 	var result = {};
-    for (var i = 0; i < vars.length; i++) {
-        var pair = vars[i].split('=');
+	for (var i = 0; i < vars.length; i++) {
+		var pair = vars[i].split('=');
 		var varName = decodeURIComponent(pair[0]);
 		var type = variables[varName];
-        if (type === undefined) continue;
+		if (type === undefined) continue;
 
 		var value = decodeURIComponent(pair[1]);
 		var ok = false;
@@ -4820,9 +4985,9 @@ exports.parseQueryVariables = function(search,variables) {
 		}
 		if(ok){
 			result[varName] = value;
-        }
-    }
-    return result;
+		}
+	}
+	return result;
 };
 
 exports.floodfill = function(get, set, x, y, target, replace, xmin, xmax, ymin, ymax){
